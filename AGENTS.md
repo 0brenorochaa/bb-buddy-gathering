@@ -28,3 +28,5 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+- RSVP data lives in Lovable Cloud tables (rsvps, admins, admin_sessions, login_attempts) with RLS on and no policies; only server code in src/lib/rsvp.server.ts touches them via supabaseAdmin. Why: guests have no accounts, and the organizer login is a custom cookie session.
