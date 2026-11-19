@@ -1,10 +1,35 @@
 import { useState, type FormEvent } from "react";
-import { Check } from "lucide-react";
-import { OTHER_RELATION, RELATIONS, validateRsvp, type RsvpInput, type RsvpRecord } from "@/lib/rsvp-model";
+import { Check, Plus, X } from "lucide-react";
+import {
+  MAX_COMPANIONS,
+  OTHER_RELATION,
+  RELATIONS,
+  validateRsvp,
+  type Companion,
+  type RsvpInput,
+  type RsvpRecord,
+} from "@/lib/rsvp-model";
 import { cn } from "@/lib/cn";
 import { Alert, Button, SelectField, TextField } from "@/components/ui";
 
 type Choice = boolean | null;
+
+const EMPTY_COMPANION: Companion = { name: "", relation: "", relationNote: "" };
+
+function initialCompanions(initial?: RsvpRecord | null): Companion[] {
+  if (!initial || !initial.attending || !initial.hasCompanion) return [];
+  if (initial.companions.length > 0) return initial.companions.map((item) => ({ ...item }));
+  if (initial.companionName) {
+    return [
+      {
+        name: initial.companionName,
+        relation: initial.companionRelation,
+        relationNote: initial.companionRelationNote,
+      },
+    ];
+  }
+  return [{ ...EMPTY_COMPANION }];
+}
 
 export function RsvpForm({
   initial,
@@ -25,14 +50,31 @@ export function RsvpForm({
   const [companion, setCompanion] = useState<Choice>(
     initial && initial.attending ? initial.hasCompanion : null,
   );
-  const [companionName, setCompanionName] = useState(initial?.companionName ?? "");
-  const [relation, setRelation] = useState(initial?.companionRelation ?? "");
-  const [relationNote, setRelationNote] = useState(initial?.companionRelationNote ?? "");
+  const [companions, setCompanions] = useState<Companion[]>(initialCompanions(initial));
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
   const showCompanion = attending === true;
   const showCompanionFields = attending === true && companion === true;
+
+  function updateCompanion(index: number, patch: Partial<Companion>) {
+    setCompanions((list) =>
+      list.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
+    );
+  }
+
+  function chooseCompanion(next: boolean) {
+    setCompanion(next);
+    if (next && companions.length === 0) setCompanions([{ ...EMPTY_COMPANION }]);
+  }
+
+  function addCompanion() {
+    setCompanions((list) => (list.length >= MAX_COMPANIONS ? list : [...list, { ...EMPTY_COMPANION }]));
+  }
+
+  function removeCompanion(index: number) {
+    setCompanions((list) => list.filter((_, itemIndex) => itemIndex !== index));
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -41,7 +83,7 @@ export function RsvpForm({
       return;
     }
     if (attending && companion === null) {
-      setError("Informe se você vai levar um acompanhante.");
+      setError("Informe se você vai levar acompanhante.");
       return;
     }
     const parsed = validateRsvp({
@@ -49,9 +91,10 @@ export function RsvpForm({
       attending: attending === true,
       undecided: attendance === "maybe",
       hasCompanion: attending ? companion === true : false,
-      companionName,
-      companionRelation: relation,
-      companionRelationNote: relationNote,
+      companions: attending && companion === true ? companions : [],
+      companionName: "",
+      companionRelation: "",
+      companionRelationNote: "",
       correctionCode,
     });
     if (!parsed.ok) {
@@ -107,47 +150,73 @@ export function RsvpForm({
         <div>
           <fieldset className="flex flex-col gap-3 pb-1">
             <legend className="text-sm font-medium text-ink">Você vai levar algum acompanhante?</legend>
-            <ChoiceButton selected={companion === true} onSelect={() => setCompanion(true)} label="Sim." />
-            <ChoiceButton selected={companion === false} onSelect={() => setCompanion(false)} label="Não." />
+            <ChoiceButton selected={companion === true} onSelect={() => chooseCompanion(true)} label="Sim." />
+            <ChoiceButton selected={companion === false} onSelect={() => chooseCompanion(false)} label="Não." />
           </fieldset>
         </div>
       </div>
 
       <div className="reveal" data-open={showCompanionFields ? "true" : "false"}>
         <div className="flex flex-col gap-4 pb-1">
-          <TextField
-            label="Nome e idade do acompanhante"
-            name="companionName"
-            autoComplete="off"
-            value={companionName}
-            onChange={(event) => setCompanionName(event.target.value)}
-            required={showCompanionFields}
-          />
-          <SelectField
-            label="Qual é o parentesco ou relação com você?"
-            name="companionRelation"
-            value={relation}
-            onChange={(event) => setRelation(event.target.value)}
-            required={showCompanionFields}
-          >
-            <option value="">Selecione</option>
-            {RELATIONS.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </SelectField>
-          <div className="reveal" data-open={relation === OTHER_RELATION ? "true" : "false"}>
-            <div>
+          {companions.map((item, index) => (
+            <div key={index} className="flex flex-col gap-4 rounded-xl bg-paper p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold tracking-wide text-muted uppercase">
+                  Acompanhante {index + 1}
+                </p>
+                {companions.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => removeCompanion(index)}
+                    className="inline-flex h-8 items-center gap-1 rounded-full px-2 text-xs font-semibold text-navy"
+                    aria-label={`Remover acompanhante ${index + 1}`}
+                  >
+                    <X className="size-3.5" aria-hidden="true" />
+                    Remover
+                  </button>
+                ) : null}
+              </div>
               <TextField
-                label="Escreva o parentesco"
-                name="companionRelationNote"
-                value={relationNote}
-                onChange={(event) => setRelationNote(event.target.value)}
-                placeholder="Ex.: primo, colega, sogra"
+                label="Nome e idade do acompanhante"
+                name={`companionName-${index}`}
+                autoComplete="off"
+                value={item.name}
+                onChange={(event) => updateCompanion(index, { name: event.target.value })}
+                required={showCompanionFields}
               />
+              <SelectField
+                label="Qual é o parentesco ou relação com você?"
+                name={`companionRelation-${index}`}
+                value={item.relation}
+                onChange={(event) => updateCompanion(index, { relation: event.target.value })}
+                required={showCompanionFields}
+              >
+                <option value="">Selecione</option>
+                {RELATIONS.map((relation) => (
+                  <option key={relation} value={relation}>
+                    {relation}
+                  </option>
+                ))}
+              </SelectField>
+              <div className="reveal" data-open={item.relation === OTHER_RELATION ? "true" : "false"}>
+                <div>
+                  <TextField
+                    label="Escreva o parentesco"
+                    name={`companionRelationNote-${index}`}
+                    value={item.relationNote}
+                    onChange={(event) => updateCompanion(index, { relationNote: event.target.value })}
+                    placeholder="Ex.: primo, colega, sogra"
+                  />
+                </div>
+              </div>
             </div>
-          </div>
+          ))}
+          {companions.length < MAX_COMPANIONS ? (
+            <Button variant="quiet" className="w-full" onClick={addCompanion}>
+              <Plus className="size-4" aria-hidden="true" />
+              Adicionar outro acompanhante
+            </Button>
+          ) : null}
         </div>
       </div>
 

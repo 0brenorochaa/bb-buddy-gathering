@@ -5,6 +5,7 @@ import {
   normalizeName,
   SUCCESS_MESSAGE,
   validateRsvp,
+  type Companion,
   type OwnResult,
   type RsvpInput,
   type RsvpRecord,
@@ -43,6 +44,15 @@ type DbRsvp = {
   updated_at: string | Date;
 };
 
+type DbCompanion = {
+  id: string;
+  rsvp_id: string;
+  position: number;
+  name: string;
+  relation: string;
+  relation_note: string;
+};
+
 function cookieBase() {
   return {
     httpOnly: true,
@@ -64,19 +74,42 @@ function num(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function mapRow(row: DbRsvp): RsvpRecord {
+async function loadCompanions(sql: Sql, rsvpIds: string[]): Promise<Map<string, Companion[]>> {
+  const map = new Map<string, Companion[]>();
+  if (rsvpIds.length === 0) return map;
+  const rows = await sql<DbCompanion>`
+    select id, rsvp_id, position, name, relation, relation_note
+    from companions
+    where rsvp_id = any(${rsvpIds})
+    order by position asc, created_at asc
+  `;
+  for (const row of rows) {
+    const list = map.get(row.rsvp_id) ?? [];
+    list.push({ name: row.name ?? "", relation: row.relation ?? "", relationNote: row.relation_note ?? "" });
+    map.set(row.rsvp_id, list);
+  }
+  return map;
+}
+
+function mapRow(row: DbRsvp, companions: Companion[] = []): RsvpRecord {
   return {
     id: row.id,
     fullName: row.full_name,
     attending: row.attending === true,
     undecided: row.undecided === true,
     hasCompanion: row.has_companion === true,
+    companions,
     companionName: row.companion_name ?? "",
     companionRelation: row.companion_relation ?? "",
     companionRelationNote: row.companion_relation_note ?? "",
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
+}
+
+async function mapRows(sql: Sql, rows: DbRsvp[]): Promise<RsvpRecord[]> {
+  const companions = await loadCompanions(sql, rows.map((row) => row.id));
+  return rows.map((row) => mapRow(row, companions.get(row.id) ?? []));
 }
 
 async function ensureAdmin(sql: Sql) {
@@ -210,6 +243,24 @@ function rememberTicket(code: string) {
   setCookie(TICKET_COOKIE, normalized, { ...cookieBase(), maxAge: TICKET_SECONDS });
 }
 
+async function writeCompanions(sql: Sql, rsvpId: string, companions: Companion[]) {
+  await sql`delete from companions where rsvp_id = ${rsvpId}`;
+  for (let index = 0; index < companions.length; index += 1) {
+    const companion = companions[index]!;
+    await sql`
+      insert into companions (id, rsvp_id, position, name, relation, relation_note)
+      values (
+        ${crypto.randomUUID()},
+        ${rsvpId},
+        ${index},
+        ${companion.name},
+        ${companion.relation},
+        ${companion.relationNote}
+      )
+    `;
+  }
+}
+
 async function writeRow(sql: Sql, id: string, value: RsvpInput) {
   await sql`
     update rsvps set
@@ -224,6 +275,7 @@ async function writeRow(sql: Sql, id: string, value: RsvpInput) {
       updated_at = now()
     where id = ${id}
   `;
+  await writeCompanions(sql, id, value.companions);
 }
 
 export async function submitRegistration(raw: unknown): Promise<SubmitResult> {
@@ -264,12 +316,13 @@ export async function submitRegistration(raw: unknown): Promise<SubmitResult> {
     await writeRow(sql, owned.id, value);
     rememberTicket(ownedCode);
     const fresh = await sql<DbRsvp>`select * from rsvps where id = ${owned.id} limit 1`;
+    const [record] = await mapRows(sql, [fresh[0] ?? owned]);
     return {
       ok: true,
       created: false,
       code: formatCode(ownedCode),
       message: SUCCESS_MESSAGE,
-      rsvp: mapRow(fresh[0] ?? owned),
+      rsvp: record!,
     };
   }
 
@@ -304,6 +357,7 @@ export async function submitRegistration(raw: unknown): Promise<SubmitResult> {
         ${sha256(code)}
       )
     `;
+    await writeCompanions(sql, id, value.companions);
   } catch (error) {
     const message = error instanceof Error ? error.message.toLowerCase() : "";
     if (message.includes("unique") || message.includes("23505")) {
@@ -319,12 +373,13 @@ export async function submitRegistration(raw: unknown): Promise<SubmitResult> {
   rememberTicket(code);
   const fresh = await sql<DbRsvp>`select * from rsvps where id = ${id} limit 1`;
   if (!fresh[0]) throw new Error("Não foi possível ler a confirmação recém-salva.");
+  const [record] = await mapRows(sql, [fresh[0]]);
   return {
     ok: true,
     created: true,
     code: formatCode(code),
     message: SUCCESS_MESSAGE,
-    rsvp: mapRow(fresh[0]),
+    rsvp: record!,
   };
 }
 
@@ -338,11 +393,15 @@ export async function lookupOwn(raw: unknown): Promise<OwnResult> {
     const row = await findByCode(sql, explicit);
     if (!row) return { ok: false, error: "Código não encontrado. Confira e tente de novo." };
     rememberTicket(explicit);
-    return { ok: true, rsvp: mapRow(row), code: formatCode(explicit) };
+    const [mapped] = await mapRows(sql, [row]);
+    return { ok: true, rsvp: mapped!, code: formatCode(explicit) };
   }
   if (cookieCode) {
     const row = await findByCode(sql, cookieCode);
-    if (row) return { ok: true, rsvp: mapRow(row), code: formatCode(cookieCode) };
+    if (row) {
+      const [mapped] = await mapRows(sql, [row]);
+      return { ok: true, rsvp: mapped!, code: formatCode(cookieCode) };
+    }
   }
   return { ok: true, rsvp: null, code: "" };
 }
@@ -365,7 +424,12 @@ export async function adminOverview(): Promise<
       count(*) filter (where attending)::int as attending,
       count(*) filter (where not attending and not undecided)::int as absent,
       count(*) filter (where undecided)::int as undecided,
-      count(*) filter (where attending and has_companion)::int as companions
+      (
+        select count(*)::int
+        from companions c
+        join rsvps r on r.id = c.rsvp_id
+        where r.attending and r.has_companion
+      ) as companions
     from rsvps
   `;
   const statsRow = statsRows[0];
@@ -383,7 +447,7 @@ export async function adminOverview(): Promise<
       companions,
       confirmedPeople: attending + companions,
     },
-    rows: rows.map(mapRow),
+    rows: await mapRows(sql, rows),
   };
 }
 

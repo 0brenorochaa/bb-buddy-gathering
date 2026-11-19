@@ -38,6 +38,16 @@ const SCHEMA = [
   )`,
   `alter table rsvps add column if not exists undecided boolean not null default false`,
   `create index if not exists rsvps_correction_hash_idx on rsvps (correction_hash)`,
+  `create table if not exists companions (
+    id text primary key,
+    rsvp_id text not null references rsvps (id) on delete cascade,
+    position int not null default 0,
+    name text not null,
+    relation text not null,
+    relation_note text not null default '',
+    created_at timestamptz not null default now()
+  )`,
+  `create index if not exists companions_rsvp_idx on companions (rsvp_id)`,
 ];
 
 let ready: Promise<Sql> | null = null;
