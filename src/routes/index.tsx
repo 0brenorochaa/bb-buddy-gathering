@@ -1,23 +1,28 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { HomePage } from "@/components/home-page";
+import { fetchOwn } from "@/lib/rsvp.functions";
 
-// The home route ships no og:image, so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
 export const Route = createFileRoute("/")({
-  component: Index,
+  head: () => ({
+    meta: [
+      { title: "BB Confraternização 2026 · Confirme sua presença" },
+      { name: "description", content: "Confirme sua presença na BB Confraternização 2026." },
+      { property: "og:title", content: "BB Confraternização 2026" },
+      { property: "og:description", content: "Confirme sua presença na BB Confraternização 2026." },
+    ],
+  }),
+  loader: () => fetchOwn({ data: {} }),
+  component: Home,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
-function Index() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
-  );
+function Home() {
+  const own = Route.useLoaderData();
+  if (!own.ok) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-paper px-6 text-center text-ink">
+        <p>{own.error}</p>
+      </main>
+    );
+  }
+  return <HomePage own={own.rsvp} code={own.code} />;
 }
