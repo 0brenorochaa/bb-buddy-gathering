@@ -29,4 +29,4 @@ use the editor.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
 
-- RSVP data lives in Lovable Cloud tables (rsvps, admins, admin_sessions, login_attempts) with RLS on and no policies; only server code in src/lib/rsvp.server.ts touches them via supabaseAdmin. Why: guests have no accounts, and the organizer login is a custom cookie session.
+- RSVP data lives in the user's own Neon Postgres, reached via @neondatabase/serverless and DATABASE_URL (src/lib/db.ts creates tables if missing); only src/lib/rsvp.server.ts queries it. Why: the site is hosted on Vercel, outside Lovable, and must reach its database from there.
